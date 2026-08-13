@@ -602,6 +602,33 @@ class HandleChildren:
                 results.extend(self._look_for_role_files(basedir, role))
         return results
 
+    def _recheck_playbook_with_extra_vars(
+        self,
+        possible_path: Path,
+        is_collection: bool,
+    ) -> bool:
+        """Re-check playbook syntax with configured extra_vars.
+
+        has_playbook() runs its syntax check without our configured extra_vars,
+        so it wrongly fails on a local playbook that only loads once those vars
+        are defined. Re-check with them before giving up.
+        """
+        extra_vars = self.app.options.extra_vars
+        if not extra_vars or is_collection:
+            return False
+        return (
+            self.app.runtime.run(
+                [
+                    "ansible-playbook",
+                    "--syntax-check",
+                    str(possible_path),
+                    "--extra-vars",
+                    json.dumps(extra_vars),
+                ],
+            ).returncode
+            == 0
+        )
+
     def import_playbook_children(
         self,
         lintable: Lintable,
@@ -652,26 +679,8 @@ class HandleChildren:
             elif not self.app.runtime.has_playbook(
                 str(possible_path),
             ):
-                extra_vars = self.app.options.extra_vars
                 is_collection = bool(namespace_name and collection_name)
-                # has_playbook() runs its syntax check without our configured
-                # extra_vars, so it wrongly fails on a local playbook that only
-                # loads once those vars are defined. Re-check with them before
-                # giving up, while still reporting genuinely broken playbooks.
-                if (
-                    extra_vars
-                    and not is_collection
-                    and self.app.runtime.run(
-                        [
-                            "ansible-playbook",
-                            "--syntax-check",
-                            str(possible_path),
-                            "--extra-vars",
-                            json.dumps(extra_vars),
-                        ],
-                    ).returncode
-                    == 0
-                ):
+                if self._recheck_playbook_with_extra_vars(possible_path, is_collection):
                     return [Lintable(possible_path, kind=parent_type)]
                 msg = f"Failed to load {v} playbook due to failing syntax check."
                 break
